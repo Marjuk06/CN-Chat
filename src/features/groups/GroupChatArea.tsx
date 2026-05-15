@@ -1,32 +1,32 @@
 "use client"
 
 import { useState, useEffect, useRef } from 'react'
-import { Phone, Video, MoreVertical, Search } from 'lucide-react'
+import { Users, MoreVertical, Search, Settings } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import MessageBubble from './MessageBubble'
-import TypingIndicator from './TypingIndicator'
-import MessageInput from './MessageInput'
-import ChatSearch from './ChatSearch'
+import MessageBubble from '@/features/chat/MessageBubble'
+import TypingIndicator from '@/features/chat/TypingIndicator'
+import MessageInput from '@/features/chat/MessageInput'
+import ChatSearch from '@/features/chat/ChatSearch'
+import GroupSettings from '@/features/groups/GroupSettings'
 import { useTyping } from '@/hooks/useTyping'
 import type { Message, Reaction } from '@/types/chat'
 
-export default function ChatArea({ onBack }: { onBack?: () => void }) {
+type Props = {
+  group: { id: string; name: string; avatar_url?: string | null }
+  currentUser: string
+  onBack: () => void
+}
+
+export default function GroupChatArea({ group, currentUser, onBack }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [messages, setMessages] = useState<Message[]>([])
-  const [currentUser, setCurrentUser] = useState('Marjuk')
   const [replyTo, setReplyTo] = useState<Message | null>(null)
   const [editMessage, setEditMessage] = useState<Message | null>(null)
   const [highlightId, setHighlightId] = useState<string | null>(null)
   const [showSearch, setShowSearch] = useState(false)
-  const chatId = 'global'
+  const [showSettings, setShowSettings] = useState(false)
 
-  const { handleTyping } = useTyping(chatId, currentUser)
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const u = params.get('user')
-    if (u) setCurrentUser(u)
-  }, [])
+  const { handleTyping } = useTyping(group.id, currentUser)
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -39,15 +39,15 @@ export default function ChatArea({ onBack }: { onBack?: () => void }) {
       const { data } = await supabase
         .from('messages')
         .select('*, reactions(*)')
-        .eq('chat_id', 'global')  
+        .eq('chat_id', group.id)
         .order('created_at', { ascending: true })
       if (data) setMessages(data as Message[])
     }
     fetch()
 
     const channel = supabase
-      .channel('realtime-messages')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, async (payload) => {
+      .channel(`group-${group.id}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${group.id}` }, async (payload) => {
         const { data } = await supabase
           .from('messages')
           .select('*, reactions(*)')
@@ -65,48 +65,25 @@ export default function ChatArea({ onBack }: { onBack?: () => void }) {
             : m
         ))
       })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reactions' }, (payload) => {
-        setMessages((prev) => prev.map((m) =>
-          m.id === payload.old.message_id
-            ? { ...m, reactions: (m.reactions || []).filter((r) => r.id !== payload.old.id) }
-            : m
-        ))
-      })
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [])
-
-  useEffect(() => {
-    const markRead = async () => {
-      await supabase
-        .from('messages')
-        .update({ status: 'read' })
-        .eq('status', 'sent')
-        .neq('sender', currentUser)
-    }
-    if (messages.length > 0) markRead()
-  }, [messages, currentUser])
+  }, [group.id])
 
   const handleSend = async (content: string, mediaUrl?: string, mediaType?: string) => {
     if (!content.trim() && !mediaUrl) return
-
     if (editMessage) {
-      await supabase
-        .from('messages')
-        .update({ content, is_edited: true })
-        .eq('id', editMessage.id)
+      await supabase.from('messages').update({ content, is_edited: true }).eq('id', editMessage.id)
       setEditMessage(null)
       return
     }
-
     await supabase.from('messages').insert([{
       content,
       sender: currentUser,
+      chat_id: group.id,
       reply_to: replyTo?.id || null,
       media_url: mediaUrl || null,
       media_type: mediaType || null,
-      is_forwarded: false,
     }])
     setReplyTo(null)
   }
@@ -115,7 +92,6 @@ export default function ChatArea({ onBack }: { onBack?: () => void }) {
     const existing = messages
       .find((m) => m.id === msgId)
       ?.reactions?.find((r) => r.user_id === currentUser && r.emoji === emoji)
-
     if (existing) {
       await supabase.from('reactions').delete().eq('id', existing.id)
     } else {
@@ -143,6 +119,7 @@ export default function ChatArea({ onBack }: { onBack?: () => void }) {
     await supabase.from('messages').insert([{
       content: msg.content,
       sender: currentUser,
+      chat_id: group.id,
       media_url: msg.media_url,
       media_type: msg.media_type,
       is_forwarded: true,
@@ -151,45 +128,56 @@ export default function ChatArea({ onBack }: { onBack?: () => void }) {
 
   return (
     <section className="flex flex-1 flex-col relative z-10 bg-black/20">
+      {/* Header */}
       <header className="flex h-16 items-center justify-between border-b border-white/10 bg-white/5 px-4 backdrop-blur-md sm:px-6">
-        <div className="flex items-center gap-2 sm:gap-4">
+        <div className="flex items-center gap-3">
           <button onClick={onBack} className="p-1 text-gray-400 hover:text-white sm:hidden">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m15 18-6-6 6-6"/></svg>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="m15 18-6-6 6-6"/>
+            </svg>
           </button>
-          <div className="h-10 w-10 rounded-full bg-violet-600/30 flex items-center justify-center">
-            <span className="text-sm font-bold text-violet-200">CN</span>
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-700/50 border border-violet-500/30 overflow-hidden">
+            {group.avatar_url
+              ? <img src={group.avatar_url} alt={group.name} className="h-full w-full object-cover" />
+              : <Users className="h-5 w-5 text-violet-300" />
+            }
           </div>
           <div>
-            <h2 className="text-sm font-semibold text-white">Global Chat</h2>
-            <p className="text-xs text-violet-400">Online</p>
+            <h2 className="text-sm font-semibold text-white">{group.name}</h2>
+            <p className="text-xs text-violet-400">Group</p>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-gray-400 sm:gap-4">
+        <div className="flex items-center gap-2 text-gray-400">
           <button onClick={() => setShowSearch(!showSearch)} className="transition hover:text-white">
             <Search className="h-5 w-5" />
           </button>
-          <button className="transition hover:text-white"><Phone className="h-5 w-5" /></button>
-          <button className="transition hover:text-white"><Video className="h-5 w-5" /></button>
-          <button className="transition hover:text-white"><MoreVertical className="h-5 w-5" /></button>
+          <button onClick={() => setShowSettings(true)} className="transition hover:text-white">
+            <Settings className="h-5 w-5" />
+          </button>
+          <button className="transition hover:text-white">
+            <MoreVertical className="h-5 w-5" />
+          </button>
         </div>
       </header>
 
       {showSearch && (
-        <ChatSearch
-          messages={messages}
-          onHighlight={setHighlightId}
-          onClose={() => setShowSearch(false)}
-        />
+        <ChatSearch messages={messages} onHighlight={setHighlightId} onClose={() => setShowSearch(false)} />
       )}
 
+      {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 pb-24 space-y-3 sm:p-6 sm:pb-6">
+        {messages.length === 0 && (
+          <div className="flex justify-center py-12">
+            <p className="rounded-full bg-white/5 px-4 py-2 text-sm text-gray-500 border border-white/5">
+              No messages yet. Say hello! 👋
+            </p>
+          </div>
+        )}
         {messages.map((msg) => (
           <div
             key={msg.id}
             id={`msg-${msg.id}`}
-            className={`transition-all duration-300 rounded-xl ${
-              highlightId === msg.id ? 'bg-violet-500/20 -mx-2 px-2' : ''
-            }`}
+            className={`transition-all duration-300 rounded-xl ${highlightId === msg.id ? 'bg-violet-500/20 -mx-2 px-2' : ''}`}
           >
             <MessageBubble
               msg={msg}
@@ -207,7 +195,7 @@ export default function ChatArea({ onBack }: { onBack?: () => void }) {
         ))}
       </div>
 
-      <TypingIndicator chatId={chatId} currentUser={currentUser} />
+      <TypingIndicator chatId={group.id} currentUser={currentUser} />
 
       <MessageInput
         onSend={handleSend}
@@ -218,6 +206,10 @@ export default function ChatArea({ onBack }: { onBack?: () => void }) {
         onClearEdit={() => setEditMessage(null)}
         currentUser={currentUser}
       />
+
+      {showSettings && (
+        <GroupSettings groupId={group.id} currentUser={currentUser} onClose={() => setShowSettings(false)} />
+      )}
     </section>
   )
 }
